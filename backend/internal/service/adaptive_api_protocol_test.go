@@ -116,10 +116,10 @@ func TestAdaptiveProtocolRoutesResponsesShapedChatToNativeResponses(t *testing.T
 
 func TestAdaptiveProtocolConvertsResponsesShapedChatForChatOnlyProvider(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"kimi-k2.5","input":"hello","max_output_tokens":32,"stream":false}`)
+	body := []byte(`{"model":"glm-4.7","input":"hello","max_output_tokens":32,"stream":false}`)
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
+	account := adaptiveProtocolTestAccount(PlatformZhipu, map[string]any{
 		APIProtocolChatCompletions: "http://chat.example",
 		APIProtocolAnthropic:       "http://anthropic.example",
 	})
@@ -147,21 +147,24 @@ func TestAdaptiveProtocolRoutesMessagesToNativeAnthropic(t *testing.T) {
 	require.Equal(t, "glm-4.7", gjson.GetBytes(upstream.lastBody, "model").String())
 }
 
-func TestAdaptiveProtocolConvertsKimiResponsesToChatCompletions(t *testing.T) {
+func TestAdaptiveProtocolRoutesKimiResponsesWithJSONSchemaToNativeResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"kimi-k2.5","input":"hello","stream":false}`)
+	body := []byte(`{"model":"kimi-k2.5","input":"hello","stream":false,"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]},"strict":true}}}`)
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
 		APIProtocolChatCompletions: "http://chat.example",
 		APIProtocolAnthropic:       "http://anthropic.example",
+		APIProtocolResponses:       "http://responses.example",
 	})
 
 	_, err := svc.Forward(context.Background(), adaptiveProtocolTestContext("/v1/responses", body), account, body)
 	require.Error(t, err)
-	require.Equal(t, "http://chat.example/v1/chat/completions", upstream.lastReq.URL.String())
-	require.True(t, gjson.GetBytes(upstream.lastBody, "messages").IsArray())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
+	require.Equal(t, "http://responses.example/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, "json_schema", gjson.GetBytes(upstream.lastBody, "text.format.type").String())
+	require.Equal(t, "result", gjson.GetBytes(upstream.lastBody, "text.format.name").String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 }
 
 func TestAdaptiveProtocolRoutesDeepSeekResponsesToNativeResponses(t *testing.T) {
