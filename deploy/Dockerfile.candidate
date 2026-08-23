@@ -1,0 +1,4 @@
+FROM --platform=linux/amd64 registry.cn-hongkong.aliyuncs.com/shiroha/sub2api:s2a-20260821-1030
+
+COPY --chown=sub2api:sub2api backend/bin/sub2api-linux-amd64 /app/sub2api
+COPY --chown=sub2api:sub2api backend/resources /app/resources
