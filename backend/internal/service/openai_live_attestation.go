@@ -70,6 +70,26 @@ func (c *liveAttestationAES) Decrypt(ciphertext string) (string, error) {
 	return string(plaintext), nil
 }
 
+// resolveLiveAttestation prefers a client-supplied x-oai-attestation (Codex
+// Desktop / community proxy style). Server-side DeviceCheck is only used when
+// the caller did not send one.
+func (s *OpenAIGatewayService) resolveLiveAttestation(ctx context.Context, clientHeader string) (string, string, error) {
+	clientHeader = strings.TrimSpace(clientHeader)
+	if clientHeader == "" {
+		return s.prepareLiveAttestation(ctx)
+	}
+	if s == nil || s.liveAttestationCipher == nil {
+		return "", "", &LiveAttestationUnavailableError{
+			Reason: "JWT secret is required to protect the Sideband attestation",
+		}
+	}
+	ciphertext, err := s.liveAttestationCipher.Encrypt(clientHeader)
+	if err != nil {
+		return "", "", &LiveAttestationUnavailableError{Reason: err.Error()}
+	}
+	return clientHeader, ciphertext, nil
+}
+
 func (s *OpenAIGatewayService) prepareLiveAttestation(ctx context.Context) (string, string, error) {
 	if s == nil || s.liveAttestation == nil {
 		return "", "", &LiveAttestationUnavailableError{

@@ -164,6 +164,22 @@ func TestLiveAttestationCipherRoundTripAndRejectsOtherInstanceKey(t *testing.T) 
 	require.Error(t, err)
 }
 
+func TestResolveLiveAttestationPrefersClientHeaderWithoutDeviceCheck(t *testing.T) {
+	cipher := newLiveAttestationCipher(&config.Config{
+		JWT: config.JWTConfig{Secret: "live-attestation-test-secret"},
+	})
+	service := &OpenAIGatewayService{
+		liveAttestation:       liveAttestationStub{err: errors.New("macOS app missing")},
+		liveAttestationCipher: cipher,
+	}
+	header, ciphertext, err := service.resolveLiveAttestation(context.Background(), `{"v":1,"s":0,"t":"v1.client"}`)
+	require.NoError(t, err)
+	require.Equal(t, `{"v":1,"s":0,"t":"v1.client"}`, header)
+	decrypted, err := cipher.Decrypt(ciphertext)
+	require.NoError(t, err)
+	require.Equal(t, header, decrypted)
+}
+
 func TestPrepareLiveAttestationEncryptsHeaderAndReturnsExplicitProviderError(t *testing.T) {
 	cipher := newLiveAttestationCipher(&config.Config{
 		JWT: config.JWTConfig{Secret: "live-attestation-test-secret"},

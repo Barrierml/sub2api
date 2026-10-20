@@ -138,7 +138,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	attestation, attestationCiphertext, err := s.prepareLiveAttestation(ctx)
+	attestation, attestationCiphertext, err := s.resolveLiveAttestation(ctx, identity.ClientAttestation)
 	if err != nil {
 		return nil, err
 	}
