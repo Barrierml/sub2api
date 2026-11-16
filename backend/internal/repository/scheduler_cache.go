@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
 )
@@ -863,6 +864,15 @@ func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any,
 }
 
 func buildSchedulerMetadataAccount(account service.Account) service.Account {
+	credentials := filterSchedulerCredentials(account.Credentials)
+	if account.IsGrokOAuth() {
+		if jwtTier := xai.SubscriptionTierFromJWT(account.GetCredential("access_token")); jwtTier != "" {
+			if credentials == nil {
+				credentials = make(map[string]any)
+			}
+			credentials["subscription_tier"] = jwtTier
+		}
+	}
 	return service.Account{
 		ID:                      account.ID,
 		Name:                    account.Name,
@@ -889,7 +899,7 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		QuotaDimension:          account.QuotaDimension,
 		AccountGroups:           filterSchedulerAccountGroups(account.AccountGroups),
 		GroupIDs:                filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
-		Credentials:             filterSchedulerCredentials(account.Credentials),
+		Credentials:             credentials,
 		Extra:                   filterSchedulerExtra(account.Extra),
 	}
 }
@@ -956,7 +966,15 @@ func filterSchedulerCredentials(credentials map[string]any) map[string]any {
 	}
 	// Candidate-list admission evaluates the account override before hydrating
 	// the full account. Dropping it silently falls back to the platform threshold.
-	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold"}
+	//
+	// subscription_tier 必须进投影：Grok 媒体资格候选过滤
+	// (isKnownGrokFreeAccount) 靠它识别付费档。被裁掉时，对 /v1/billing
+	// 不回 plan 的付费号（如 SuperGrok Heavy）会把 monthly_updated_at
+	// 推断成 Free，全部候选被 capability_mismatch 刷光，媒体端点报
+	// grok_media_no_eligible_account（58abc3c4）。access_token 不进投影
+	// （体量大且属凭证）；其 JWT tier 由 buildSchedulerMetadataAccount
+	// 解码成同键注入，保持「live JWT 优先于陈旧 tier」语义。
+	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold", "subscription_tier"}
 	filtered := make(map[string]any)
 	for _, key := range keys {
 		if value, ok := credentials[key]; ok && value != nil {

@@ -3,6 +3,7 @@
 package repository
 
 import (
+	"encoding/base64"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -370,6 +371,62 @@ func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 		require.False(t, eligible)
 		require.Equal(t, "billing_forbidden", reason)
 		require.NotNil(t, got.Extra["grok_billing_snapshot"])
+	})
+
+	t.Run("paid tier signals survive projection", func(t *testing.T) {
+		account := service.Account{
+			ID:       45,
+			Platform: service.PlatformGrok,
+			Type:     service.AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token":      "header.payload.sig",
+				"subscription_tier": "supergrok_heavy",
+				"refresh_token":     "should-not-be-copied",
+			},
+			Extra: map[string]any{
+				"grok_billing_snapshot": map[string]any{
+					"status_code":         200,
+					"weekly_status_code":  200,
+					"monthly_status_code": 200,
+					"monthly_updated_at":  "2026-11-16T09:22:20Z",
+				},
+			},
+		}
+
+		got := buildSchedulerMetadataAccount(account)
+
+		require.Equal(t, "supergrok_heavy", got.GetCredential("subscription_tier"))
+		require.Empty(t, got.GetCredential("access_token"))
+		require.Empty(t, got.GetCredential("refresh_token"))
+		eligible, reason := got.GrokMediaGenerationEligibility()
+		require.True(t, eligible)
+		require.Equal(t, "billing_inconclusive", reason)
+	})
+
+	t.Run("jwt tier overrides stale credential tier in projection", func(t *testing.T) {
+		jwt := "h." + base64.RawURLEncoding.EncodeToString([]byte(`{"tier":5,"sub":"x"}`)) + ".s"
+		account := service.Account{
+			ID:       46,
+			Platform: service.PlatformGrok,
+			Type:     service.AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token":      jwt,
+				"subscription_tier": "free",
+			},
+			Extra: map[string]any{
+				"grok_billing_snapshot": map[string]any{
+					"status_code":        200,
+					"monthly_status_code": 200,
+					"monthly_updated_at": "2026-11-16T09:22:20Z",
+				},
+			},
+		}
+
+		got := buildSchedulerMetadataAccount(account)
+
+		require.Equal(t, "supergrok_heavy", got.GetCredential("subscription_tier"))
+		eligible, _ := got.GrokMediaGenerationEligibility()
+		require.True(t, eligible)
 	})
 }
 
