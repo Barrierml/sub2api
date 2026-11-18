@@ -1342,6 +1342,10 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	if err != nil {
 		return nil, fmt.Errorf("build grok responses request: %w", err)
 	}
+	// Match buildGrokResponsesRequest: grok traffic needs the grok transport
+	// profile (120s header timeout + dedicated pool/protocol mode), not the
+	// generic gateway profile.
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileGrok))
 	upstreamReq.Header.Set("Authorization", "Bearer "+token)
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "application/json")
