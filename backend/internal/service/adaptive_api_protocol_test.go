@@ -131,6 +131,24 @@ func TestAdaptiveProtocolConvertsResponsesShapedChatForChatOnlyProvider(t *testi
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 }
 
+func TestAdaptiveProtocolRoutesKimiResponsesShapedChatToNativeResponses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"k3-256k","input":"hello","max_output_tokens":32,"stream":false}`)
+	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
+		APIProtocolChatCompletions: "http://chat.example",
+		APIProtocolAnthropic:       "http://anthropic.example",
+		APIProtocolResponses:       "http://responses.example/v1",
+	})
+
+	_, err := svc.ForwardAsChatCompletions(context.Background(), adaptiveProtocolTestContext("/v1/chat/completions", body), account, body, "", "")
+	require.Error(t, err)
+	require.Equal(t, "http://responses.example/v1/responses", upstream.lastReq.URL.String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
+}
+
 func TestAdaptiveProtocolRoutesMessagesToNativeAnthropic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"glm-4.7","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
@@ -147,24 +165,42 @@ func TestAdaptiveProtocolRoutesMessagesToNativeAnthropic(t *testing.T) {
 	require.Equal(t, "glm-4.7", gjson.GetBytes(upstream.lastBody, "model").String())
 }
 
-func TestAdaptiveProtocolRoutesKimiResponsesWithJSONSchemaToNativeResponses(t *testing.T) {
+func TestAdaptiveProtocolRoutesKimiResponsesToNativeResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"kimi-k2.5","input":"hello","stream":false,"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]},"strict":true}}}`)
+	body := []byte(`{"model":"k3-256k","input":"hello","store":true,"previous_response_id":"resp_old","stream":false}`)
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
 		APIProtocolChatCompletions: "http://chat.example",
 		APIProtocolAnthropic:       "http://anthropic.example",
-		APIProtocolResponses:       "http://responses.example",
+		APIProtocolResponses:       "http://responses.example/v1",
 	})
 
 	_, err := svc.Forward(context.Background(), adaptiveProtocolTestContext("/v1/responses", body), account, body)
 	require.Error(t, err)
 	require.Equal(t, "http://responses.example/v1/responses", upstream.lastReq.URL.String())
-	require.Equal(t, "json_schema", gjson.GetBytes(upstream.lastBody, "text.format.type").String())
-	require.Equal(t, "result", gjson.GetBytes(upstream.lastBody, "text.format.name").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "previous_response_id").Exists())
+}
+
+func TestAdaptiveProtocolRoutesKimiCodingResponsesToNativeResponses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"k3-256k","input":"hello","stream":false}`)
+	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
+		APIProtocolChatCompletions: "https://api.kimi.com/coding/v1",
+		APIProtocolAnthropic:       "https://api.kimi.com/coding",
+		APIProtocolResponses:       "https://api.kimi.com/coding/v1",
+	})
+	account.Credentials["account_mode"] = AccountModeCoding
+
+	_, err := svc.Forward(context.Background(), adaptiveProtocolTestContext("/v1/responses", body), account, body)
+	require.Error(t, err)
+	require.Equal(t, "https://api.kimi.com/coding/v1/responses", upstream.lastReq.URL.String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 }
 
 func TestAdaptiveProtocolRoutesDeepSeekResponsesToNativeResponses(t *testing.T) {
