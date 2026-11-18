@@ -1378,7 +1378,69 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 		}
 		return nil, fmt.Errorf("grok upstream %d: %s", resp.StatusCode, msg)
 	}
+	// cli-chat-proxy.grok.com silently drops the web_search/x_search tool: it
+	// answers from model memory and returns no web_search_call/x_search_call
+	// output item and no url_citation annotation. Without this check the caller
+	// sees a 200 with zero extracted sources and reports an "empty" search as
+	// success instead of failing over to an account that actually searched.
+	if isGrokCLIProxyTarget(targetURL) && grokResponsesSearchToolRequested(body) && !grokResponsesSearchToolUsed(respBytes) {
+		return nil, &UpstreamFailoverError{
+			StatusCode: http.StatusBadGateway,
+			Reason:     GatewayFailureReason("grok_search_tool_ignored"),
+		}
+	}
 	return respBytes, nil
+}
+
+// grokResponsesSearchToolRequested reports whether the outgoing Responses body
+// carries a server-side search tool (web_search / x_search).
+func grokResponsesSearchToolRequested(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	requested := false
+	gjson.GetBytes(body, "tools").ForEach(func(_, tool gjson.Result) bool {
+		t := tool.Get("type").String()
+		if t == "web_search" || t == "x_search" {
+			requested = true
+			return false
+		}
+		return true
+	})
+	return requested
+}
+
+// grokResponsesSearchToolUsed reports whether the Responses output shows the
+// search tool actually ran: a web_search_call/x_search_call item, or a
+// url_citation annotation on emitted text.
+func grokResponsesSearchToolUsed(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	used := false
+	gjson.GetBytes(body, "output").ForEach(func(_, item gjson.Result) bool {
+		t := item.Get("type").String()
+		if t == "web_search_call" || t == "x_search_call" {
+			used = true
+			return false
+		}
+		if t != "message" {
+			return true
+		}
+		item.Get("content").ForEach(func(_, part gjson.Result) bool {
+			part.Get("annotations").ForEach(func(_, ann gjson.Result) bool {
+				annType := ann.Get("type").String()
+				if annType == "url_citation" || annType == "web" {
+					used = true
+					return false
+				}
+				return true
+			})
+			return !used
+		})
+		return !used
+	})
+	return used
 }
 
 // mixedListingAccountAllowed mirrors the mixed-scheduling rule in
