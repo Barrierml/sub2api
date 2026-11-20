@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -69,6 +71,18 @@ func sanitizeGrokResponsesModelInput(body []byte) ([]byte, error) {
 		pendingOutputImages = pendingOutputImages[:0]
 
 		switch itemType {
+		case "agent_message":
+			content, err := json.Marshal(item["content"])
+			if err != nil {
+				return nil, fmt.Errorf("serialize Grok agent message content: %w", err)
+			}
+			text := apicompat.AgentMessageText(content)
+			if text == "" {
+				continue
+			}
+			role = "user"
+			item = map[string]any{"type": "message", "role": role, "content": text}
+			itemType = "message"
 		case "text", "input_text", "output_text":
 			text := strings.TrimSpace(grokStringValue(item["text"]))
 			if text == "" {
@@ -78,6 +92,25 @@ func sanitizeGrokResponsesModelInput(body []byte) ([]byte, error) {
 				role = "user"
 			}
 			item = map[string]any{"type": "message", "role": role, "content": text}
+			itemType = "message"
+		case "item_reference":
+			// xAI has no store/item_reference. Keep the id as a short user note so
+			// later function_call_output items still have conversation context.
+			id := strings.TrimSpace(grokStringValue(item["id"]))
+			if id == "" {
+				continue
+			}
+			role = "user"
+			item = map[string]any{
+				"type": "message",
+				"role": role,
+				"content": []any{
+					map[string]any{
+						"type": "input_text",
+						"text": "[item_reference " + id + "]",
+					},
+				},
+			}
 			itemType = "message"
 		case "custom_tool_call", "tool_search_call":
 			originalType := itemType
@@ -559,4 +592,65 @@ func collapseGrokAssistantOutputText(content any) (string, bool) {
 		return "", false
 	}
 	return text.String(), true
+}
+
+func summarizeGrokResponsesInputForLog(body []byte) string {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return "input=missing"
+	}
+	if !input.IsArray() {
+		return "input_type=" + input.Type.String()
+	}
+	items := input.Array()
+	typeCounts := make(map[string]int, 8)
+	nullPaths := make([]string, 0, 8)
+	for i, item := range items {
+		itemType := strings.TrimSpace(item.Get("type").String())
+		if itemType == "" {
+			itemType = "<empty>"
+		}
+		typeCounts[itemType]++
+		collectJSONNullPaths(fmt.Sprintf("input.%d", i), item, &nullPaths, 16)
+	}
+	parts := make([]string, 0, len(typeCounts)+2)
+	parts = append(parts, fmt.Sprintf("items=%d", len(items)))
+	for _, itemType := range sortedStringKeys(typeCounts) {
+		parts = append(parts, fmt.Sprintf("%s=%d", itemType, typeCounts[itemType]))
+	}
+	if len(nullPaths) > 0 {
+		parts = append(parts, "nulls="+strings.Join(nullPaths, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func collectJSONNullPaths(prefix string, value gjson.Result, out *[]string, limit int) {
+	if out == nil || len(*out) >= limit {
+		return
+	}
+	switch {
+	case value.Type == gjson.Null:
+		*out = append(*out, prefix)
+	case value.IsObject():
+		value.ForEach(func(key, child gjson.Result) bool {
+			collectJSONNullPaths(prefix+"."+key.String(), child, out, limit)
+			return len(*out) < limit
+		})
+	case value.IsArray():
+		for i, child := range value.Array() {
+			collectJSONNullPaths(fmt.Sprintf("%s.%d", prefix, i), child, out, limit)
+			if len(*out) >= limit {
+				return
+			}
+		}
+	}
+}
+
+func sortedStringKeys(values map[string]int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
