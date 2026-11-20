@@ -56,11 +56,12 @@ func TestDoGrokNativeResponsesJSON_CLIProxyIgnoredWebSearchFailsOver(t *testing.
 }
 
 func TestDoGrokNativeResponsesJSON_CLIProxyRealSearchPasses(t *testing.T) {
-	svc, _ := newGrokSearchTestService(grokSearchRealResponse)
+	svc, upstream := newGrokSearchTestService(grokSearchRealResponse)
 
 	respBytes, err := svc.DoGrokNativeResponsesJSON(context.Background(), newGrokCLIProxyTestAccount(), []byte(grokSearchRequestBody))
 	require.NoError(t, err)
 	require.Contains(t, string(respBytes), "web_search_call")
+	require.Equal(t, HTTPUpstreamProfileGrok, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 }
 
 func TestDoGrokNativeResponsesJSON_CLIProxyNoSearchToolNotChecked(t *testing.T) {
